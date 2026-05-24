@@ -104,7 +104,7 @@ kolo-trust/
 ### 1. Configure Environment
 Set up your database credentials and application endpoint inside a `.env` file in the root:
 ```env
-DATABASE_URL="postgresql://neondb_owner:npg_UWqQD8oNy5hP@ep-snowy-pond-aqo7drt5.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
+DATABASE_URL="postgresql://YOUR_NEON_USER:YOUR_NEON_PASSWORD@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 ```
 
