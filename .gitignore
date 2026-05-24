@@ -47,3 +47,5 @@ next-env.d.ts
 # IDE config directories
 /.idea/
 /.vscode/
+
+.vercel
