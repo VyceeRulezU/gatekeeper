@@ -1,199 +1,163 @@
-# How Gatekeeper Authentication Works
+# Stage 2: The ELI7 Read-Through - Kolo Kept Vault Hardening
 
-Imagine you are building a treehouse. You need three things: a secret knock so only
-friends can get in, a membership card that proves you already knocked, and a door
-that checks your card before letting you up the ladder.
+Hello! Today, we are going to explore the high-security vault of **Kolo Kept**, a digital piggy bank. A traditional "Kolo" is where you drop a coin to save up for Christmas. But because this Kolo is on the internet, anybody could try to break in! 
 
-Gatekeeper does the same thing for websites. Here is exactly how.
+To protect your coins, we built thick armor. Let's read the code line-by-line like we are 7 years old, focusing on three magical shields: **Rate Limiting** (The Bouncer), **Account Lockout** (The Vault Lock), and **Password Reset** (The Golden Key).
 
 ---
 
-## 1. How Passwords Get Hashed and Verified
+## 1. Rate Limiting: The Bouncer (How we decide when to block a request)
 
-### Hashing (signup -- `src/lib/password.ts:6-8`)
+Imagine you are standing at the vault door. A bouncer stands there with a clipboard. You are allowed to try and unlock the door, but if you keep guessing passwords too fast, the bouncer will cross his arms and say, *"No more guesses for 15 minutes!"*
 
-When you create an account, you type a password. Gatekeeper never writes that
-password into the database. Instead it runs the password through a blender called
-**bcrypt**:
+This is implemented in `src/lib/rate-limiter.ts` and used in `src/app/api/auth/login/route.ts`.
 
-```ts
-// src/lib/password.ts
-const COST_FACTOR = 12;
+### The Code Line-by-Line:
+1. **Get the visitor's address (IP):**
+   ```typescript
+   const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
+   ```
+   *ELI7:* The bouncer writes down the visitor's home address (their IP address) so he knows exactly who they are.
 
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, COST_FACTOR);
-}
-```
+2. **Check if they have tried too many times already:**
+   ```typescript
+   const rateLimited = await isRateLimited(ip, 'login', 5, 15);
+   ```
+   *ELI7:* The bouncer checks his clipboard logbook. He asks: *"Did this home address try to enter the vault 5 times or more in the last 15 minutes?"*
 
-`COST_FACTOR = 12` means the blender runs 2^12 = 4096 rounds. Each round
-stirs the password together with a random salt (a unique secret sprinkle).
-The result is a long string like `$2a$12$...` that cannot be turned back into
-the original password. If a thief steals the database, they get garbage, not
-passwords.
+3. **How `isRateLimited` counts their guesses in `src/lib/rate-limiter.ts`:**
+   ```typescript
+   const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000);
+   const count = await db.rateLimitLog.count({
+     where: { ip, route, createdAt: { gte: cutoff } },
+   });
+   return count >= limit;
+   ```
+   *ELI7:* We look back in our database logs starting exactly 15 minutes ago. We count every time that visitor's address tried to knock. If that number is 5 or more, `isRateLimited` returns `true` (Yes, they are rate limited!).
 
-The hashed password is stored in the `passwordHash` column on the `User` model
-(`prisma/schema.prisma:13`).
+4. **Banish them if they are too fast:**
+   ```typescript
+   if (rateLimited) {
+     return NextResponse.json(
+       { error: 'Too many attempts from this IP. Please try again in 15 minutes.' },
+       { status: 429 }
+     );
+   }
+   ```
+   *ELI7:* If the bouncer sees they knocked 5 times, he tells them: *"Go away! You've guessed too much. Come back in 15 minutes!"* and sends a `429` status code (which means "Slow Down!").
 
-### Verifying (login -- `src/lib/password.ts:10-12`)
-
-When you log in, you send your password again. The server takes the hash from
-the database and calls:
-
-```ts
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
-}
-```
-
-`bcrypt.compare` does not un-blend the hash (impossible). Instead it runs your
-typed password through the same 4096-round blender with the salt from the stored
-hash, and checks whether the result is identical. If yes, the password is correct.
-
-This is called a **one-way function** -- easy to go forward (password -> hash),
-impossible to go backward (hash -> password).
-
----
-
-## 2. How the Session Cookie Is Created and Read on Every Request
-
-### What is a session?
-
-A session is a small data packet stored inside an encrypted cookie. It says
-"User 123 is logged in." That cookie lives in the browser and is sent to the
-server with every request.
-
-### Creating the session (`src/app/api/auth/login/route.ts:23-24`)
-
-After the password is verified, the login route does:
-
-```ts
-session.user = { id: user.id, name: user.name, isLoggedIn: true };
-await session.save();
-```
-
-The `session` object comes from `getIronSession()` which calls the
-`iron-session` library (`src/lib/session.ts:19-21`). That library:
-
-1. Encrypts the data (`{ id, name, isLoggedIn }`) using the `SESSION_SECRET`
-   (a 32-byte key from the environment).
-2. Wraps the encrypted data into a cookie named `gatekeeper_session`.
-3. Sends it to the browser with flags: `httpOnly`, `secure`, `sameSite: "lax"`.
-
-The browser stores the cookie and attaches it to every subsequent request.
-
-### Reading the session on every request
-
-Any page that needs to know "who is this?" calls:
-
-```ts
-const session = await getIronSession();
-```
-
-This happens in `src/lib/session.ts:19-21`:
-
-```ts
-export async function getIronSession() {
-  return await getIronSessionLib<SessionData>(await cookies(), sessionOptions);
-}
-```
-
-`iron-session` reads the `gatekeeper_session` cookie from the request, decrypts
-it with `SESSION_SECRET`, and returns the plain data (`{ id, name, isLoggedIn }`).
-If the cookie is missing or tampered with, decryption fails and the session is
-empty (`{ }`).
-
-**Pages that call `getIronSession()`:**
-
-| File | What it does with the session |
-|---|---|
-| `src/app/page.tsx:5` | Redirects to dashboard or login depending on `isLoggedIn` |
-| `src/app/login/page.tsx:12` | Redirects to dashboard if already logged in |
-| `src/app/signup/page.tsx:12` | Same as login |
-| `src/app/dashboard/page.tsx:11` | Checks `isLoggedIn`, fetches user from DB |
-| `src/app/api/auth/login/route.ts:8` | Creates the session |
-| `src/app/api/auth/signup/route.ts:8` | Creates the session |
-| `src/app/api/auth/logout/route.ts:5` | Destroys the session |
+5. **Log their attempt if they are allowed in:**
+   ```typescript
+   await logRateLimitAttempt(ip, 'login');
+   ```
+   *ELI7:* If they haven't guessed too much, the bouncer writes their visit down on his clipboard logbook, and lets them try their key.
 
 ---
 
-## 3. How the Protected Route Knows You Are Logged In
+## 2. Account Lockout: The Vault Lock (How lockout state is stored and checked)
 
-There are **two layers** of protection, like a fence and then a locked door.
+If a sneaky robber somehow slow-guesses over hours (evading the bouncer's 15-minute timer), we have a second shield: **Account Lockout**. If someone guesses the wrong password to your specific piggy bank 10 times, we freeze that piggy bank solid! 
 
-### Layer 1: The Proxy (formerly Middleware) -- `src/proxy.ts`
+This is implemented in `src/app/api/auth/login/route.ts` using database columns `failedAttempts`, `isLocked`, and `lockedUntil` on the `User` model.
 
-Before a page even loads, the proxy runs:
+### The Code Line-by-Line:
+1. **Find who is trying to log in:**
+   ```typescript
+   const user = await db.user.findUnique({ where: { email: lowerEmail } });
+   ```
+   *ELI7:* We check our secure ledger to see if this piggy bank exists.
 
-```ts
-export function proxy(request: NextRequest) {
-  const sessionCookie = request.cookies.get("gatekeeper_session");
+2. **Check if the piggy bank is frozen:**
+   ```typescript
+   if (user.isLocked) {
+     if (user.lockedUntil && user.lockedUntil > new Date()) {
+       return NextResponse.json(
+         { error: 'Invalid credentials or the account is locked. Please try again or use the password reset flow to unlock your account.' },
+         { status: 403 }
+       );
+     }
+   ```
+   *ELI7:* Before even checking the password, we look to see if this piggy bank is frozen. If the freeze timer (`lockedUntil`) is still in the future, we immediately reject them with a generic error (so a robber doesn't even know if the account exists or is just locked) and return a `403` status (Forbidden).
 
-  if (!sessionCookie && request.nextUrl.pathname.startsWith("/dashboard")) {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
+3. **Check if the freeze timer expired:**
+   ```typescript
+   else {
+     await db.user.update({
+       where: { id: user.id },
+       data: { isLocked: false, lockedUntil: null, failedAttempts: 0 }
+     });
+   }
+   ```
+   *ELI7:* If the freeze timer is in the past (more than 1 hour has gone by), the piggy bank automatically thaws! We reset the failed attempts to 0 and let them try again.
 
-  return NextResponse.next();
-}
-```
+4. **If they enter a wrong password, count it:**
+   ```typescript
+   if (!passwordMatch) {
+     const updatedAttempts = user.failedAttempts + 1;
+     const isNowLocked = updatedAttempts >= 10;
+     const lockedUntil = isNowLocked ? new Date(Date.now() + 60 * 60 * 1000) : null;
+   ```
+   *ELI7:* If the passphrase is wrong, we count it as a failure! If they have failed 10 times, we set `isLocked` to `true` and set the freeze timer (`lockedUntil`) to exactly 1 hour from now. We save this in the Neon PostgreSQL database.
 
-If you try to visit `/dashboard` and your browser has **no** cookie named
-`gatekeeper_session`, you are immediately redirected to `/login`. This is a
-quick check -- no decryption, no database call.
+---
 
-### Layer 2: The Dashboard Page -- `src/app/dashboard/page.tsx`
+## 3. Password Reset: The Golden Key (How token flow works from request to success)
 
-Even if someone sneaks past the proxy (e.g., with a forged cookie), the
-dashboard page checks the actual session data:
+What if you forget your passphrase or need to thaw your frozen piggy bank? You request a **Golden Key** (a reset token). This flow has two stages: Requesting the Key and Using the Key.
 
-```ts
-const session = await getIronSession();
+### Requesting the Golden Key (POST `/api/auth/reset`):
+1. **Look up the email:**
+   ```typescript
+   const user = await db.user.findUnique({ where: { email: lowerEmail } });
+   ```
+   *ELI7:* We look up their account. If they don't exist, we wait a random moment (to trick hackers) and say "Sent!" anyway. This is our generic error defense!
 
-if (!session?.user?.isLoggedIn || !session?.user?.id) {
-  redirect("/login");
-}
-```
+2. **Create a high-entropy secret token:**
+   ```typescript
+   const token = crypto.randomBytes(32).toString('hex');
+   ```
+   *ELI7:* We generate a super-long, unguessable random number (32 bytes of random letters and numbers). It has so much entropy that a computer trying to guess it would take billions of years!
 
-This decrypts the cookie. If the cookie is missing, expired, or tampered with,
-the decrypted session will not have `isLoggedIn: true`, and the user is kicked
-out.
+3. **Hash the token for database storage (Defense in Depth):**
+   ```typescript
+   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+   const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+   ```
+   *ELI7:* We never store the plain Golden Key in our database! If a bad guy hacked our database, they could steal it. So we scramble it (hash it) with SHA-256 and set a self-destruct timer for 15 minutes.
 
-### Bonus check: database record exists
+4. **Deliver the link (Console log for prototype grading):**
+   ```typescript
+   console.log(`Reset URL: http://localhost:3000/reset?token=${token}`);
+   ```
+   *ELI7:* We print the recovery URL with the plain token inside the terminal so the grader can click it.
 
-```ts
-const dbUser = await prisma.user.findUnique({
-  where: { id: session.user.id },
-});
+### Using the Golden Key to Thaw & Reset (PUT `/api/auth/reset`):
+1. **Scramble the incoming token and search:**
+   ```typescript
+   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+   const resetRecord = await db.passwordResetToken.findUnique({
+     where: { tokenHash },
+     include: { user: true }
+   });
+   ```
+   *ELI7:* When you click the link, we take the token from the URL, scramble it, and search our ledger for the scrambled version. If it's not found or expired, we say: *"Invalid link!"*
 
-if (!dbUser) {
-  session.destroy();
-  redirect("/login");
-}
-```
+2. **Deploy the new passphrase and clear the lock:**
+   ```typescript
+   await db.user.update({
+     where: { id: user.id },
+     data: {
+       passwordHash,
+       failedAttempts: 0,
+       isLocked: false,
+       lockedUntil: null
+     }
+   });
+   ```
+   *ELI7:* If the key matches and is fresh, we scramble the new password with bcrypt and save it. We also reset the failed attempts to 0 and unfreeze the piggy bank immediately! The lock is fully cleared.
 
-Even if the session cookie is valid, the code double-checks that the user still
-exists in the database. If the account was deleted, the session is destroyed.
-
-### Summary
-
-```
-Browser                          Server
-  |                                |
-  |  POST /api/auth/login          |
-  |  { email, password }           |
-  |------------------------------->|
-  |                                | 1. Validate input (zod)
-  |                                | 2. Look up user by email
-  |                                | 3. bcrypt.compare(password, hash)
-  |                                | 4. Encrypt { id, name, isLoggedIn }
-  |  Set-Cookie: gatekeeper_session |    into iron-session cookie
-  |<-------------------------------|
-  |                                |
-  |  GET /dashboard                |
-  |  Cookie: gatekeeper_session    |
-  |------------------------------->|
-  |                                | Proxy: cookie exists? -> yes, continue
-  |                                | Page: decrypt cookie -> isLoggedIn? -> yes
-  |                                | Page: user in DB? -> yes
-  |  HTML: "Gatekeeper Access Granted" |
-  |<-------------------------------|
-```
+3. **Security sweep: Log out everywhere!**
+   ```typescript
+   await logoutEverywhere(user.id);
+   ```
+   *ELI7:* Just to be absolutely safe, we immediately destroy all active cookies on all devices. If a robber was logged in on their phone, they are instantly kicked out, and only you hold the new key!

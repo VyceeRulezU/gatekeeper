@@ -1,11 +1,12 @@
-import { redirect } from "next/navigation";
-import { getIronSession } from "@/lib/session";
+import { redirect } from 'next/navigation';
+import { getSession } from '@/lib/auth';
 
 export default async function HomePage() {
-  const session = await getIronSession();
-  if (session?.user?.isLoggedIn) {
-    redirect("/dashboard");
+  const sessionContext = await getSession();
+
+  if (sessionContext) {
+    redirect('/dashboard');
   } else {
-    redirect("/login");
+    redirect('/login');
   }
 }

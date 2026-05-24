@@ -1,215 +1,118 @@
-# Authentication Principles in Gatekeeper
+# Stage 3: Principles Spotting - Kolo Kept Security Architecture
 
-Each principle below has a plain-English definition followed by the exact lines
-in the codebase that demonstrate it.
-
----
-
-## 1. Never Store Plaintext Passwords
-
-**Definition:** When a user creates a password, the application must transform it
-into an unrecoverable form before saving it. If the database is stolen, the thief
-must not be able to read any passwords.
-
-**Where Gatekeeper does it:**
-
-`src/lib/password.ts:6-8` -- The password is run through bcrypt with a cost
-factor of 12 (4096 rounds) before it ever touches the database:
-
-```ts
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, COST_FACTOR);
-}
-```
-
-`prisma/schema.prisma:13` -- The database schema stores `passwordHash`, not
-`password`:
-
-```prisma
-passwordHash String
-```
-
-`src/app/api/auth/signup/route.ts:20-21` -- The hash is what gets saved:
-
-```ts
-const hash = await hashPassword(password);
-const user = await prisma.user.create({ data: { email, name, passwordHash: hash } });
-```
-
-Even the column name (`passwordHash`) is a reminder: never raw passwords.
+Mapping the security implementation of the **Kolo Kept** piggy bank vault to standard cybersecurity principles. Every principle has been rigorously translated into direct, actionable Next.js and Prisma code.
 
 ---
 
-## 2. Server-Side Validation
+## 1. Least Privilege
+* **Definition:** A system must limit user actions and access rights to the absolute minimum required to perform their valid functions. Users must never be allowed to view, modify, or delete resources belonging to others.
+* **Code Reference:** `src/app/api/savings/route.ts` (Ownership Validation)
+  ```typescript
+  // Check ownership before deleting
+  const entry = await db.savingsEntry.findUnique({
+    where: { id: entryId },
+  });
 
-**Definition:** All security-critical checks must happen on the server. Client-side
-checks are convenience for the user (faster feedback), but the server is the
-truth. A user can bypass the browser entirely with `curl`.
-
-**Where Gatekeeper does it:**
-
-`src/app/api/auth/signup/route.ts:10-13` -- Server validates every field with
-Zod before touching the database:
-
-```ts
-const parseResult = signupSchema.safeParse(body);
-if (!parseResult.success) {
-  return new Response(JSON.stringify({ error: parseResult.error.issues[0].message }), { status: 400 });
-}
-```
-
-`src/lib/validation.ts:4-11` -- The Zod schema enforces length limits, character
-requirements, and email format on the server:
-
-```ts
-export const signupSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters").max(100).trim(),
-  email: z.string().email("Invalid email address").toLowerCase().trim(),
-  password: z.string()
-    .min(8, "Password must be at least 8 characters")
-    .max(128)
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, "Password must contain uppercase, lowercase, and number"),
-});
-```
-
-`src/app/api/auth/login/route.ts:10-12` -- Login also validates server-side:
-
-```ts
-const parseResult = loginSchema.safeParse(body);
-if (!parseResult.success) {
-  return new Response(JSON.stringify({ error: parseResult.error.issues[0].message }), { status: 400 });
-}
-```
-
----
-
-## 3. Defense in Depth
-
-**Definition:** Multiple independent layers of security. If one layer fails, the
-next one still protects you. Like having a lock on your front door AND a lock
-on your bedroom door.
-
-**Where Gatekeeper does it:**
-
-`src/proxy.ts:4-12` (Layer 1) -- The proxy checks for the existence of a
-session cookie before the page renders:
-
-```ts
-export function proxy(request: NextRequest) {
-  const sessionCookie = request.cookies.get("gatekeeper_session");
-  if (!sessionCookie && request.nextUrl.pathname.startsWith("/dashboard")) {
-    return NextResponse.redirect(new URL("/login", request.url));
+  if (!entry) {
+    return NextResponse.json({ error: 'Entry not found' }, { status: 404 });
   }
-  return NextResponse.next();
-}
-```
 
-`src/app/dashboard/page.tsx:11-15` (Layer 2) -- The dashboard itself decrypts
-the cookie and verifies `isLoggedIn`:
-
-```ts
-const session = await getIronSession();
-if (!session?.user?.isLoggedIn || !session?.user?.id) {
-  redirect("/login");
-}
-```
-
-`src/app/dashboard/page.tsx:18-26` (Layer 3) -- The dashboard also checks the
-database still has the user record:
-
-```ts
-const dbUser = await prisma.user.findUnique({ where: { id: session.user.id } });
-if (!dbUser) {
-  session.destroy();
-  redirect("/login");
-}
-```
-
-Three layers: proxy -> session decrypt -> database lookup.
+  if (entry.userId !== sessionContext.user.id) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  ```
+* **Explanation:** When deleting a savings entry, we don't just delete it by ID. We first query the database, verify that the entry exists, and explicitly check if its `userId` matches the authenticated `sessionContext.user.id`. If a malicious user attempts to pass a UUID belonging to another user, they are rejected with a `403 Forbidden` status.
 
 ---
 
-## 4. Least Privilege
+## 2. Defense in Depth
+* **Definition:** Rather than relying on a single security control, a secure system deploys multiple, layered, redundant defensive measures. If one layer is bypassed, other layers are in place to block the attack.
+* **Code References:** 
+  1. **Layer 1: IP Rate Limiting** (`src/lib/rate-limiter.ts`) - Blocks massive automated brute force attempts at the IP network level (5 attempts / 15 mins).
+  2. **Layer 2: User Account Lockout** (`src/app/api/auth/login/route.ts`) - If an attacker distributes guesses across multiple IPs to bypass Layer 1, they trigger a user-specific lockout (10 failed attempts / 1 hour) stored in the database.
+  3. **Layer 3: Cryptographic Passphrase Hashing** (`src/app/api/auth/register/route.ts`) - If an attacker somehow bypasses other layers and accesses the database, they cannot read passwords because they are securely hashed with bcrypt (cost factor 12).
+  4. **Layer 4: Token Hashing** (`src/app/api/auth/reset/route.ts`) - Reset tokens are stored in the database as SHA-256 hashes rather than raw text, protecting them from theft in case of database leakage.
 
-**Definition:** Every part of the system gets only the permissions it absolutely
-needs to do its job, and nothing more. A component that only reads should not be
-able to write.
+---
 
-**Where Gatekeeper does it:**
+## 3. Fail Securely
+* **Definition:** When a security check or code execution encounters an unexpected error, exception, or empty value, the system must default to its most secure state (e.g., access denied, operation blocked).
+* **Code Reference:** `src/lib/csrf.ts` (CSRF Exception Handling)
+  ```typescript
+  export async function verifyCsrf(req: Request): Promise<boolean> {
+    const cookieStore = await cookies();
+    const csrfCookie = cookieStore.get(CSRF_COOKIE_NAME)?.value;
+    
+    if (!csrfCookie) return false;
 
-`src/app/api/auth/logout/route.ts:4-8` -- The logout route uses
-`iron-session`'s `destroy()` to erase the session cookie. It does NOT have
-access to delete user records or modify other data:
+    const csrfHeader = req.headers.get('x-csrf-token');
+    if (!csrfHeader) return false;
 
-```ts
-export async function POST() {
-  const session = await getIronSession();
-  await session.destroy();
-  redirect("/login");
-}
-```
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(csrfCookie, 'hex'),
+        Buffer.from(csrfHeader, 'hex')
+      );
+    } catch (e) {
+      return false; // Fail Securely: reject on error
+    }
+  }
+  ```
+* **Explanation:** If the cookie or header is missing, the method immediately exits returning `false` (blocking the request). If the token lengths do not match, `crypto.timingSafeEqual` will throw an exception. We catch this exception and explicitly return `false` to fail securely, ensuring the mutation fails.
 
-`src/app/dashboard/page.tsx:18-20` -- The dashboard page uses `findUnique`
-(read-only) to fetch user data. It never calls `update` or `delete` on the
-user:
+---
 
-```ts
-const dbUser = await prisma.user.findUnique({
-  where: { id: session.user.id },
-});
-```
+## 4. Generic Errors (Anti-Enumeration)
+* **Definition:** System messages must never reveal internal state details, database structures, or resource existence (such as whether an email address is registered) to prevent attackers from mapping the system.
+* **Code Reference:** `src/app/api/auth/register/route.ts` (Registration Shadow Success)
+  ```typescript
+  const existingUser = await db.user.findUnique({
+    where: { email: lowerEmail },
+  });
 
-`src/lib/session.ts:7-8` -- The session cookie itself stores only the minimum
-data needed (`id`, `name`, `isLoggedIn`). No email, no password hash, no
-sensitive info:
+  if (existingUser) {
+    // Timing attack protection: simulate hashing delay
+    const start = Date.now();
+    await bcrypt.genSalt(12);
+    const elapsed = Date.now() - start;
+    await wait(Math.max(300, elapsed));
 
-```ts
-password: process.env.SESSION_SECRET as string,
-cookieName: process.env.SESSION_COOKIE_NAME || "gatekeeper_session",
-```
-
-The session type (`src/types/session.ts:4-10`) confirms the payload is minimal:
-
-```ts
-export interface SessionData {
-  user?: {
-    id: string;
-    name: string;
-    isLoggedIn: boolean;
-  };
-}
-```
+    return NextResponse.json(
+      { message: 'Registration request received. Please check your email or proceed to login.' },
+      { status: 200 }
+    );
+  }
+  ```
+* **Explanation:** When an email is already registered, we perform a dummy bcrypt calculation to match response times and return the *exact same* success message as a new user. Similarly, our login and password reset routes return generic messages (e.g. `"Invalid credentials or the account is locked..."` / `"If that email is registered, a password reset link has been sent..."`), preventing username/email discovery.
 
 ---
 
 ## 5. Secure Defaults
+* **Definition:** Out of the box, all configurations must be locked down to the highest security settings. Opt-out is required for lesser security, never opt-in.
+* **Code Reference:** `src/lib/auth.ts` (Cookie Configuration)
+  ```typescript
+  cookieStore.set(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || true,
+    sameSite: 'strict',
+    path: '/',
+    expires: expiresAt,
+  });
+  ```
+* **Explanation:** The cookie session uses `httpOnly: true` (prevents Javascript access, stopping XSS token theft), `secure: true` (enforces transmission only over encrypted HTTPS connections), and `sameSite: 'strict'` (ensures the browser never sends the cookie on third-party links, offering perfect cross-site request forgery protection).
 
-**Definition:** Security features should be turned ON by default. The user should
-have to deliberately turn them OFF, not remember to turn them ON.
+---
 
-**Where Gatekeeper does it:**
-
-`src/lib/session.ts:10-16` -- Cookie flags default to the safest options:
-
-```ts
-cookieOptions: {
-  secure: process.env.NODE_ENV === "production",  // HTTPS only in prod
-  httpOnly: true,                                   // JS cannot read the cookie
-  sameSite: "lax" as const,                         // Blocks cross-site POST requests
-  path: "/",                                        // Available everywhere
-  maxAge: 60 * 60 * 24 * 7,                         // Auto-expires after 7 days
-},
-```
-
-- `httpOnly: true` -- prevents JavaScript from stealing the cookie via XSS.
-- `sameSite: "lax"` -- prevents the cookie from being sent on cross-site POST
-  requests (CSRF protection).
-- `secure: true in production` -- cookie only sent over HTTPS.
-- `maxAge: 7 days` -- session automatically expires.
-
-`src/lib/password.ts:4` -- bcrypt cost factor is set to 12, not 1. This is the
-secure default that makes brute-forcing slow:
-
-```ts
-const COST_FACTOR = 12;
-```
+## 6. Separation of Concerns
+* **Definition:** Modularizing security operations into distinct, reusable layers so that business logic routes do not have to manage low-level authentication mechanics directly.
+* **Code Reference:** Architecture structure
+  * `src/lib/csrf.ts` handles CSRF token operations.
+  * `src/lib/auth.ts` handles session creation, tracking, and cookie distribution.
+  * `src/lib/rate-limiter.ts` handles IP network filtering logs.
+  * route handlers in `/api/` merely call these isolated components:
+    ```typescript
+    const csrfValid = await verifyCsrf(req);
+    const rateLimited = await isRateLimited(ip, 'login', 5, 15);
+    const session = await getSession();
+    ```
+* **Explanation:** By isolating cryptographic operations, session lifecycles, and database rate limits, the codebase becomes incredibly readable, easily testable, and highly auditable.

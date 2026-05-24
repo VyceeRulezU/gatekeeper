@@ -1,173 +1,127 @@
-# 🔒 The Gatekeeper
+# 🔒 Kolo Kept - The Digital Piggy Bank Vault
 
-> _The door that decides who gets in._
+> _A digital piggy bank secured with the locks of an institutional vault._
 
-A production-grade authentication system built with Next.js 15 App Router. Not a tutorial. Not a boilerplate. The real thing — hashed passwords, secure sessions, server-side validation, protected routes.
+**Kolo Kept** is a high-security, premium digital piggy bank application. A "Kolo" is a traditional savings box where small coins grow into a large sum over time. Because this piggy bank lives online, anyone can try to brute-force or break in. Our mission was not just to write features—it was to **add hardness**. To turn a basic savings tracker into something that can take punches from advanced web attackers.
 
----
-
-## What This Is
-
-Most developers treat auth like a checkbox. The Gatekeeper treats it like the most critical code in the app — because it is. Every account, every setting, every piece of user data lives behind this door.
-
-**The Gatekeeper** is a Next.js 15 full-stack authentication application demonstrating:
-
-- Secure user registration with live password strength feedback
-- Bcrypt password hashing (never store plaintext)
-- HTTP-only cookie sessions via `iron-session`
-- Server-side validation with Zod (client validation is UX, server validation is security)
-- Protected routes via Next.js middleware
-- Clean, typed TypeScript throughout
+This application is built with **Next.js 15 App Router**, **TypeScript**, **Vanilla CSS**, and **Prisma with Neon serverless PostgreSQL**.
 
 ---
 
-## Stack
+## 🎨 Design Aesthetics & Design System
+
+Kolo Kept features a high-end, premium **tech-neon dark glassmorphism design system** crafted entirely from raw **Vanilla CSS variables** without external libraries (no Tailwind CSS, no component frameworks).
+
+* **Aesthetic Palette:** Deep-space navy and carbon background (`#070913`), brilliant cyberpunk cyan accents (`#00f2fe`), violet-pink glowing fills, and high-contrast alert states.
+* **Glassmorphism Glass Cards:** Translucent containers featuring deep backing blurs (`backdrop-filter: blur(16px)`), micro-white borders, and subtle glowing dropshadows.
+* **Cyber Vault Typography:** Embedded modern Outfit and Plus Jakarta Sans type families with micro-animations and smooth transition interpolations on hover and active states.
+
+---
+
+## 🔒 Hardened Security Implementations
+
+Kolo Kept deploys multiple enterprise-grade security controls at every layer:
+
+1. **IP-Based Rate Limiting:** Limits the login endpoint to 5 attempts per IP per 15 minutes. Logs attempts in the **Neon PostgreSQL database** to survive process restarts and scale correctly across serverless containers.
+2. **Account Lockout Tracker:** Automatically locks a user's account for 1 hour after 10 failed login attempts within an hour. Provides a clear unlock path via the **Password Reset flow**.
+3. **Double-Submit CSRF Protection:** Generates high-entropy CSRF tokens on page load, stored in secure HTTP-only cookies, and verified from headers (`x-csrf-token`) on all mutating endpoints (POST, PUT, DELETE).
+4. **Interactive Passphrase Strength Meter:** Enforces a server-side and client-side password complexity rule of at least 12 characters, including uppercase, lowercase, numbers, and special symbols.
+5. **Anti-Enumeration Latency Protection:**
+   * Runs dummy bcrypt checks on non-existent accounts to match hits and misses response times.
+   * Simulates identical timing envelopes on duplicate email checks during registration.
+   * Employs random latency padding on password reset request loops.
+   * Never leaks account existence via error or success messages.
+6. **Log Out Everywhere:** Revokes all active database session records for a user upon re-keying or global logout, instantly forcing all logged-in devices to re-authenticate.
+7. **HTTP-only SameSite=Strict Cookies:** Session tokens and CSRF parameters are protected from cross-site request forgery and XSS access.
+
+---
+
+## 🛠️ Technology Stack
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router) |
-| Language | TypeScript |
-| Styling | Vanilla CSS (CSS custom properties) |
-| Database | SQLite via Prisma ORM |
-| Auth Sessions | iron-session (JWT in HTTP-only cookie) |
-| Password Hashing | bcrypt |
-| Validation | Zod |
+| **Framework** | Next.js 15 (App Router) |
+| **Language** | TypeScript |
+| **Styling** | Vanilla CSS (CSS custom properties) |
+| **Database** | Neon Serverless PostgreSQL |
+| **ORM** | Prisma ORM |
+| **Password Hashing** | Bcrypt (cost factor 12) |
+| **Validation** | Zod |
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
-gatekeeper/
-├── README.md                     ← You are here
-├── docs/
-│   ├── ARCHITECTURE.md           ← System design & decisions
-│   ├── AUTH_FLOW.md              ← Authentication flow documentation
-│   ├── DATA_MODELS.md            ← Prisma schema & data design
-│   ├── SECURITY.md               ← Security model & threat analysis
-│   ├── ROUTES.md                 ← Route map & access control
-│   └── SETUP.md                  ← Local dev setup guide
+kolo-trust/
+├── README.md                      ← You are here
+├── package.json                   ← Node packages config
+├── prisma.config.ts               ← Prisma 7 central configurations
+├── docs/                          ← Hardening proof & grading deliverables
+│   ├── 01-explanation.md          ← Stage 2: ELI7 line-by-line breakdown
+│   ├── 02-principles.md           ← Stage 3: Direct security principles mapping
+│   ├── 03-audit.md                ← Stage 4: Critical vulnerability audit
+│   ├── 04-cross-check.md          ← Stage 5: Cross-model audit verification
+│   ├── 05-tinker.md               ← Stage 6: Brute force tinker test results
+│   └── 06-lie-detector.md         ← Stage 7: The Security Lie Detector
 ├── prisma/
-│   ├── schema.prisma             ← Database schema
-│   └── migrations/               ← Auto-generated migration files
+│   └── schema.prisma              ← Vault-hardened schema models
+├── public/                        ← Static assets
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx            ← Root layout
-│   │   ├── page.tsx              ← Landing page (public)
-│   │   ├── globals.css           ← Global CSS variables & resets
+│   │   ├── layout.tsx             ← Premium Outfit font loading & SEO meta
+│   │   ├── page.tsx               ← Base gateway redirection controller
+│   │   ├── globals.css            ← CSS design system tokens & glows
 │   │   ├── login/
-│   │   │   └── page.tsx          ← Login page
+│   │   │   └── page.tsx           ← Glassmorphic Login gateway
 │   │   ├── signup/
-│   │   │   └── page.tsx          ← Signup page
+│   │   │   └── page.tsx           ← Registration with live strength bar
+│   │   ├── reset/
+│   │   │   └── page.tsx           ← Recovery page (dual requests & execute)
 │   │   ├── dashboard/
-│   │   │   └── page.tsx          ← Protected dashboard
+│   │   │   └── page.tsx           ← Secure dashboard server wrapper
 │   │   └── api/
-│   │       ├── auth/
-│   │       │   ├── signup/
-│   │       │   │   └── route.ts  ← POST /api/auth/signup
-│   │       │   ├── login/
-│   │       │   │   └── route.ts  ← POST /api/auth/login
-│   │       │   └── logout/
-│   │       │       └── route.ts  ← POST /api/auth/logout
-│   │       └── user/
-│   │           └── me/
-│   │               └── route.ts  ← GET /api/user/me
+│   │       └── auth/
+│   │           ├── csrf/          ← GET: CSRF cookie initialization
+│   │           ├── register/      ← POST: Anti-enumeration signups
+│   │           ├── login/         ← POST: Rate-limited secure lock
+│   │           ├── logout/        ← POST: Session destructor
+│   │           ├── logout-everywhere/ ← POST: Global session invalidation
+│   │           └── reset/         ← POST/PUT: Vault recovery & re-keying
 │   ├── components/
-│   │   ├── auth/
-│   │   │   ├── SignupForm.tsx     ← Signup form with password meter
-│   │   │   ├── LoginForm.tsx     ← Login form
-│   │   │   └── PasswordStrength.tsx ← Live password strength meter
-│   │   └── ui/
-│   │       ├── Button.tsx        ← Reusable button component
-│   │       ├── Input.tsx         ← Reusable input component
-│   │       └── FormError.tsx     ← Inline form error display
-│   ├── lib/
-│   │   ├── prisma.ts             ← Prisma client singleton
-│   │   ├── session.ts            ← iron-session config & helpers
-│   │   ├── password.ts           ← bcrypt hash & verify helpers
-│   │   └── validation.ts         ← Zod schemas (shared)
-│   └── types/
-│       ├── session.ts            ← Session type declarations
-│       └── api.ts                ← API request/response types
-└── middleware.ts                 ← Route protection middleware
+│   │   └── DashboardClient.tsx    ← Interactive piggy bank CRUD & locking UI
+│   └── lib/
+│       ├── db.ts                  ← Prisma Pg adapter pool singleton
+│       ├── csrf.ts                ← Timing-safe double submit CSRF hook
+│       ├── auth.ts                ← HTTP-only secure cookie session lifecycles
+│       └── rate-limiter.ts        ← Cluster-safe Postgres rate logs
 ```
 
 ---
 
-## Quick Start
+## ⚡ Quick Start
 
-See [docs/SETUP.md](./docs/SETUP.md) for the full local development guide.
+### 1. Configure Environment
+Set up your database credentials and application endpoint inside a `.env` file in the root:
+```env
+DATABASE_URL="postgresql://neondb_owner:npg_UWqQD8oNy5hP@ep-snowy-pond-aqo7drt5.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
+```
 
+### 2. Generate Prisma Client
+Build the database interfaces:
 ```bash
-# 1. Install dependencies
-npm install
+npx prisma generate
+```
 
-# 2. Copy environment variables
-cp .env.example .env.local
+### 3. Deploy Database Schema
+Push the hardened tables to Neon PostgreSQL:
+```bash
+npx prisma db push
+```
 
-# 3. Generate session secret
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-# → paste into SESSION_SECRET in .env.local
-
-# 4. Set up the database
-npx prisma migrate dev --name init
-
-# 5. Run the dev server
+### 4. Run Development Server
+```bash
 npm run dev
 ```
-
----
-
-## Core Features
-
-### Landing Page (`/`)
-Public-facing page with two CTAs: **Sign Up** and **Log In**. Sets the tone — this is the door.
-
-### Sign Up (`/signup`)
-- Fields: Name, Email, Password
-- Live password strength meter (client-side UX)
-- Full server-side validation via Zod
-- Password hashed with bcrypt before DB write
-- Session created immediately on success → redirects to `/dashboard`
-
-### Log In (`/login`)
-- Fields: Email, Password
-- bcrypt comparison against stored hash
-- Session created → redirects to `/dashboard`
-- No information leakage on failure ("Invalid credentials" — not "user not found")
-
-### Dashboard (`/dashboard`)
-- Protected route — middleware blocks unauthenticated access
-- Displays user's name from session
-- Log Out button destroys the session cookie
-
----
-
-## Environment Variables
-
-```env
-# .env.local
-
-DATABASE_URL="file:./dev.db"
-SESSION_SECRET="<32-byte hex string — generate with crypto.randomBytes(32)>"
-SESSION_COOKIE_NAME="gatekeeper_session"
-NODE_ENV="development"
-```
-
----
-
-## Security Principles
-
-1. **Passwords are never stored in plaintext** — bcrypt with cost factor 12
-2. **Sessions live in HTTP-only cookies** — JavaScript cannot read them
-3. **All validation runs server-side** — client validation is a UX layer only
-4. **Error messages are opaque** — attackers learn nothing from failure messages
-5. **Middleware enforces route protection** — not just UI conditionals
-
-See [docs/SECURITY.md](./docs/SECURITY.md) for the full threat model.
-
----
-
-## License
-
-MIT
+Open [http://localhost:3000](http://localhost:3000) in your browser to access the digital vault.
